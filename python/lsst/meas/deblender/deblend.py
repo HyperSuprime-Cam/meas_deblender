@@ -23,6 +23,7 @@ import math
 import numpy
 
 import lsst.pex.config as pexConf
+import lsst.pex.exceptions as pexExcept
 import lsst.afw.table as afwTable
 import lsst.pipe.base as pipeBase
 import lsst.afw.math as afwMath
