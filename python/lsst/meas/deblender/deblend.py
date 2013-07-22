@@ -154,7 +154,7 @@ class SourceDeblendTask(pipeBase.Task):
                               maxNumberOfPeaks=self.config.maxNumberOfPeaks)
                 src.set(self.deblendFailedKey, False)
             except Exception as e:
-                self.log.warn("Error deblending source %d: %s" % (src.getId(), e))
+                self.log.warn("Unable to deblend source %d: %s" % (src.getId(), e))
                 src.set(self.deblendFailedKey, True)
                 continue
 
