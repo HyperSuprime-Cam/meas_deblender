@@ -251,6 +251,11 @@ class SourceDeblendTask(pipeBase.Task):
                     src.set(self.deblendSkippedKey, True)
                     continue
 
+                print 'parent had', len(fp.getPeaks()), 'peaks'
+                print 'child has', len(heavy.getPeaks()), 'peak'
+                if peak.deblendedAsPsf:
+                    print '  deb-as-psf'
+
                 src.set(self.deblendSkippedKey, False)
 
                 child = srcs.addNew(); nchild += 1
