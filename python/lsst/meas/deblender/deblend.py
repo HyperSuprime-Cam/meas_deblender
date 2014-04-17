@@ -21,6 +21,7 @@
 #
 import math
 import numpy
+import time
 
 import lsst.pex.config as pexConf
 import lsst.pex.exceptions as pexExcept
@@ -60,9 +61,23 @@ class SourceDeblendConfig(pexConf.Config):
     assignStrayFlux = pexConf.Field(dtype=bool, default=True,
                                     doc='Assign stray flux to deblend children.  Implies findStrayFlux.')
 
-    clipStrayFluxFraction = pexConf.Field(dtype=float, default=0.01,
-                                          doc=('When splitting stray flux, clip fractions below this value to zero.'))
-    
+    strayFluxRule = pexConf.ChoiceField(
+        doc='How to split flux among peaks',
+        dtype=str, default='r-to-peak',
+        allowed = {
+            'r-to-peak': '~ 1/(1+R^2) to the peak',
+            'r-to-footprint': ('~ 1/(1+R^2) to the closest pixel in the footprint.  '
+                               'CAUTION: this can be computationally expensive on large footprints!'),
+            'nearest-footprint': ('Assign 100% to the nearest footprint (using L-1 norm aka '
+                                  'Manhattan distance)')
+            }
+        )
+
+    clipStrayFluxFraction = pexConf.Field(
+        dtype=float, default=0.001,
+        doc='When splitting stray flux, clip fractions below this value to zero.'
+        )
+
     psfChisq1 = pexConf.Field(dtype=float, default=1.5, optional=False,
                                 doc=('Chi-squared per DOF cut for deciding a source is '+
                                      'a PSF during deblending (un-shifted PSF model)'))
@@ -75,6 +90,9 @@ class SourceDeblendConfig(pexConf.Config):
     maxNumberOfPeaks = pexConf.Field(dtype=int, default=0,
                                      doc=("Only deblend the brightest maxNumberOfPeaks peaks in the parent" +
                                           " (<= 0: unlimited)"))
+    maxFootprintArea = pexConf.Field(dtype=int, default=100000,
+                                     doc=('Refuse to deblend parent footprints containing more than this number of pixels (due to speed concerns); 0 means no limit.'))
+
     maxFootprintArea = pexConf.Field(dtype=int, default=100000,
                                      doc=('Refuse to deblend parent footprints containing more than this number of pixels (due to speed concerns); 0 means no limit.'))
 
@@ -97,6 +115,9 @@ class SourceDeblendTask(pipeBase.Task):
         """
         pipeBase.Task.__init__(self, **kwargs)
 
+        self.addSchemaKeys(schema)
+
+    def addSchemaKeys(self, schema):
         self.nChildKey = schema.addField('deblend.nchild', type=int,
                                          doc='Number of children this object has (defaults to 0)')
         self.psfKey = schema.addField('deblend.deblended-as-psf', type='Flag',
@@ -170,12 +191,15 @@ class SourceDeblendTask(pipeBase.Task):
         mi = exposure.getMaskedImage()
         stats = afwMath.makeStatistics(mi.getVariance(), mi.getMask(), afwMath.MEDIAN)
         sigma1 = math.sqrt(stats.getValue(afwMath.MEDIAN))
+        self.log.logdebug('sigma1: %g' % sigma1)
 
         schema = srcs.getSchema()
 
         n0 = len(srcs)
         nparents = 0
         for i,src in enumerate(srcs):
+            #t0 = time.clock()
+
             fp = src.getFootprint()
             pks = fp.getPeaks()
             if len(pks) < 2:
@@ -213,6 +237,7 @@ class SourceDeblendTask(pipeBase.Task):
                     assignStrayFlux=self.config.assignStrayFlux,
                     findStrayFlux=(self.config.assignStrayFlux or
                                    self.config.findStrayFlux),
+                    strayFluxAssignment=self.config.strayFluxRule,
                     rampFluxAtEdge=(self.config.edgeHandling == 'ramp'),
                     patchEdges=(self.config.edgeHandling == 'noclip'),
                     tinyFootprintSize=self.config.tinyFootprintSize,
@@ -243,9 +268,9 @@ class SourceDeblendTask(pipeBase.Task):
                                       % (pks[j].getIx(), pks[j].getIy(), j+1, len(res.peaks)))
                     src.set(self.deblendSkippedKey, True)
                     continue
+                assert(len(heavy.getPeaks()) == 1)
 
                 src.set(self.deblendSkippedKey, False)
-
                 child = srcs.addNew(); nchild += 1
                 child.setParent(src.getId())
                 child.setFootprint(heavy)
@@ -265,6 +290,7 @@ class SourceDeblendTask(pipeBase.Task):
             src.set(self.nChildKey, nchild)
             
             self.postSingleDeblendHook(exposure, srcs, i, npre, kids, fp, psf, psf_fwhm, sigma1, res)
+            #print 'Deblending parent id', src.getId(), 'took', time.clock() - t0
 
         n1 = len(srcs)
         self.log.info('Deblended: of %i sources, %i were deblended, creating %i children, total %i sources' %
@@ -275,4 +301,5 @@ class SourceDeblendTask(pipeBase.Task):
     
     def postSingleDeblendHook(self, exposure, srcs, i, npre, kids, fp, psf, psf_fwhm, sigma1, res):
         pass
+
 
