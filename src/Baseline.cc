@@ -2,6 +2,7 @@
 
 #include "lsst/meas/deblender/Baseline.h"
 #include "lsst/pex/logging.h"
+#include "lsst/pex/exceptions.h"
 #include "lsst/afw/geom/Box.h"
 #include "lsst/meas/algorithms/detail/SdssShape.h"
 
@@ -1099,9 +1100,18 @@ buildSymmetricTemplate(
     pexLog::Log log(pexLog::Log::getDefaultLog(),
                     "lsst.meas.deblender.symmetricFootprint");
 
+    if (!img.getBBox(image::PARENT).contains(foot.getBBox())) {
+        throw LSST_EXCEPT(lsst::pex::exceptions::LengthErrorException, "Image too small for footprint");
+    }
+
     FootprintPtrT sfoot = symmetrizeFootprint(foot, cx, cy);
     if (!sfoot) {
         return std::pair<MaskedImagePtrT, FootprintPtrT>(MaskedImagePtrT(), sfoot);
+    }
+
+    if (!img.getBBox(image::PARENT).contains(sfoot->getBBox())) {
+        throw LSST_EXCEPT(lsst::pex::exceptions::LengthErrorException,
+                          "Image too small for symmetrized footprint");
     }
     const SpanList spans = sfoot->getSpans();
 
@@ -1157,6 +1167,10 @@ buildSymmetricTemplate(
             // include ORing the mask bits, or being clever about
             // ignoring some masked pixels, or copying the mask bits
             // of the min pixel
+
+            // We have already checked the bounding box, so this should always be satisfied
+            assert(theimg->getBBox(image::PARENT).contains(geom::Point2I(fx, fy)));
+            assert(theimg->getBBox(image::PARENT).contains(geom::Point2I(bx, by)));
 
             // FIXME -- we could do this with image iterators instead.
             // But first profile to show that it's necessary and an
