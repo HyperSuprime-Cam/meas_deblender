@@ -120,7 +120,7 @@ void
 deblend::BaselineUtils<ImagePixelT,MaskPixelT,VariancePixelT>::
 makeMonotonic(
     MaskedImageT & mimg,
-    det::Peak const& peak) {
+    det::PeakRecord const& peak) {
 
     int cx = peak.getIx();
     int cy = peak.getIy();
@@ -1089,7 +1089,7 @@ deblend::BaselineUtils<ImagePixelT,MaskPixelT,VariancePixelT>::
 buildSymmetricTemplate(
     MaskedImageT const& img,
     det::Footprint const& foot,
-    det::Peak const& peak,
+    det::PeakRecord const& peak,
     double sigma1,
     bool minZero,
     bool patchEdge,
