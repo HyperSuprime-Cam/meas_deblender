@@ -103,6 +103,8 @@ class SourceDeblendConfig(pexConf.Config):
                                      doc=("Clear and remove diagnostic mask planes on exit "
                                           "(disable for deblender debugging)"))
 
+    propagateAllPeaks = pexConf.Field(dtype=bool, default=False,
+                                      doc=('Guarantee that all peaks produce a child source.'))
     
 class SourceDeblendTask(pipeBase.Task):
     """Split blended sources into individual sources.
@@ -259,20 +261,44 @@ class SourceDeblendTask(pipeBase.Task):
             kids = []
             nchild = 0
             for j,peak in enumerate(res.peaks):
+
+                failed = False
                 if peak.skip:
                     # skip this source?
-                    self.log.logdebug('Skipping out-of-bounds peak at (%i,%i)' %
-                                      (pks[j].getIx(), pks[j].getIy()))
+                    msg = 'Skipping out-of-bounds peak at (%i,%i)' % (pks[j].getIx(), pks[j].getIy())
+                    self.log.warn(msg)
                     src.set(self.deblendSkippedKey, True)
-                    continue
+                    failed = True
 
                 heavy = peak.getFluxPortion()
                 if heavy is None:
                     # This can happen for children >= maxNumberOfPeaks
-                    self.log.logdebug('Skipping peak at (%i,%i), child %i of %i: no flux portion'
-                                      % (pks[j].getIx(), pks[j].getIy(), j+1, len(res.peaks)))
+                    msg = 'Skipping peak at (%i,%i), child %i of %i: no flux portion' \
+                          % (pks[j].getIx(), pks[j].getIy(), j+1, len(res.peaks))
+                    self.log.warn(msg)
                     src.set(self.deblendSkippedKey, True)
-                    continue
+                    failed = True
+
+                if failed:
+                    if self.config.propagateAllPeaks:
+                        # make sure we have enough info to create a minimal child src
+                        if heavy is None:
+                            # copy the full footprint and strip out extra peaks
+                            foot = afwDet.Footprint(src.getFootprint())
+                            peakList = foot.getPeaks()
+                            del peakList[0:len(peakList)]
+                            peakList.push_back(peak.peak)
+                            zeroMimg = afwImage.MaskedImageF(foot.getBBox())
+                            heavy = afwDet.makeHeavyFootprint(foot, zeroMimg)
+                        if peak.deblendedAsPsf:
+                            if peak.psfFitFlux is None:
+                                peak.psfFitFlux = 0.0
+                            if peak.psfFitCenter is None:
+                                peak.psfFitCenter = (peak.peak.getIx(), peak.peak.getIy())
+                        self.log.warn("Peak failed.  Using minimal default info for child.")
+                    else:
+                        continue
+
                 assert(len(heavy.getPeaks()) == 1)
 
                 src.set(self.deblendSkippedKey, False)
