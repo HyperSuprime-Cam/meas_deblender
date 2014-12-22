@@ -345,7 +345,7 @@ _find_stray_flux(det::Footprint const& foot,
         if (!always && ispsf.size()) {
             // create a temp list that has empty footprints in place
             // of all the point sources.
-            det::Footprint::Ptr empty(new det::Footprint());
+            PTR(det::Footprint) empty(new det::Footprint(foot.getPeaks().getSchema()));
             for (size_t i=0; i<tfoots.size(); ++i) {
                 if (ispsf[i]) {
                     templist.push_back(empty);
@@ -453,7 +453,7 @@ _find_stray_flux(det::Footprint const& foot,
                 // the stray flux to give to template i
                 double p = (contrib[i] / csum) * (*in_it).image();
                 if (!strayfoot[i]) {
-                    strayfoot[i] = det::Footprint::Ptr(new det::Footprint());
+                    strayfoot[i] = PTR(det::Footprint)(new det::Footprint(foot.getPeaks().getSchema()));
                 }
                 strayfoot[i]->addSpanInSeries(y, x, x);
                 straypix[i].push_back(p);
@@ -873,7 +873,7 @@ symmetrizeFootprint(
 
     typedef typename det::Footprint::SpanList SpanList;
 
-    PTR(det::Footprint) sfoot(new det::Footprint);
+    PTR(det::Footprint) sfoot(new det::Footprint(foot.getPeaks().getSchema()));
     const SpanList spans = foot.getSpans();
     assert(foot.isNormalized());
 
@@ -1371,7 +1371,7 @@ getSignificantEdgePixels(ImagePtrT img,
     sfoot->normalize();
     const SpanList spans = sfoot->getSpans();
     SpanList::const_iterator sp;
-    det::Footprint::Ptr edgepix(new det::Footprint());
+    PTR(det::Footprint) edgepix(new det::Footprint(sfoot->getPeaks().getSchema()));
 
     for (sp = spans.begin(); sp != spans.end(); sp++) {
         int y  = (*sp)->getY();

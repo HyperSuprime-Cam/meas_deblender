@@ -2,6 +2,7 @@ import math
 import numpy as np
 import time
 
+import lsst.pex.exceptions
 import lsst.afw.image as afwImage
 import lsst.afw.detection as afwDet
 import lsst.afw.geom  as afwGeom
@@ -518,7 +519,10 @@ class CachingPsf(object):
         im = self.cache.get((cx,cy), None)
         if im is not None:
             return im
-        im = self.psf.computeImage(afwGeom.Point2D(cx,cy))
+        try:
+            im = self.psf.computeImage(afwGeom.Point2D(cx,cy))
+        except lsst.pex.exceptions.LsstCppException:
+            im = self.psf.computeImage()
         self.cache[(cx,cy)] = im
         return im
 
@@ -946,7 +950,7 @@ def _fitPsf(fp, fmask, pk, pkF, pkres, fbb, peaks, peaksF, log, psf,
         for ii in range(NP):
             x,y = ipixes[ii,:]
             psfmod.set(int(x),int(y), float(A[ii, I_psf] * Xpsf[I_psf]))
-        modelfp = afwDet.Footprint()
+        modelfp = afwDet.Footprint(fp.getPeaks().getSchema())
         for (x,y) in ipixes:
             modelfp.addSpan(int(y+ylo), int(x+xlo), int(x+xlo))
         modelfp.normalize()
