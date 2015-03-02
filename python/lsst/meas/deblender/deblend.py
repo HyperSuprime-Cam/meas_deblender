@@ -109,7 +109,8 @@ class SourceDeblendConfig(pexConf.Config):
     catchFailures = pexConf.Field(dtype=bool, default=False,
                                   doc=("If True, catch exceptions thrown by the deblender, log them, "
                                        "and set a flag on the parent, instead of letting them propagate up"))
-
+    maskPlanes = pexConf.ListField(dtype=str, default=["SAT", "INTRP", "NO_DATA"],
+                                   doc="Mask planes to ignore when performing statistics")
 
 class SourceDeblendTask(pipeBase.Task):
     """Split blended sources into individual sources.
@@ -220,7 +221,9 @@ class SourceDeblendTask(pipeBase.Task):
 
         # find the median stdev in the image...
         mi = exposure.getMaskedImage()
-        stats = afwMath.makeStatistics(mi.getVariance(), mi.getMask(), afwMath.MEDIAN)
+        statsCtrl = afwMath.StatisticsControl()
+        statsCtrl.setAndMask(mi.getMask().getPlaneBitMask(self.config.maskPlanes))
+        stats = afwMath.makeStatistics(mi.getVariance(), mi.getMask(), afwMath.MEDIAN, statsCtrl)
         sigma1 = math.sqrt(stats.getValue(afwMath.MEDIAN))
         self.log.logdebug('sigma1: %g' % sigma1)
 
