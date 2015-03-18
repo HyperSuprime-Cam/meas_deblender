@@ -96,8 +96,9 @@ class SourceDeblendConfig(pexConf.Config):
     maxFootprintArea = pexConf.Field(dtype=int, default=100000,
                                      doc=('Refuse to deblend parent footprints containing more than this number of pixels (due to speed concerns); 0 means no limit.'))
 
-    tinyFootprintSize = pexConf.Field(dtype=int, default=2,
-                                      doc=('Footprints smaller in width or height than this value will be ignored; 0 to never ignore.'))
+    tinyFootprintSize = pexConf.RangeField(dtype=int, default=2, min=2, inclusiveMin=True,
+                                      doc=('Footprints smaller in width or height than this value will be '
+                                           'ignored; minimum of 2 due to PSF gradient calculation.'))
 
     removeMaskPlanes = pexConf.Field(dtype=int, default=True,
                                      doc=("Clear and remove diagnostic mask planes on exit "
