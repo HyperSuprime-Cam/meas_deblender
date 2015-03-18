@@ -96,8 +96,9 @@ class SourceDeblendConfig(pexConf.Config):
     maxFootprintArea = pexConf.Field(dtype=int, default=100000,
                                      doc=('Refuse to deblend parent footprints containing more than this number of pixels (due to speed concerns); 0 means no limit.'))
 
-    tinyFootprintSize = pexConf.Field(dtype=int, default=2,
-                                      doc=('Footprints smaller in width or height than this value will be ignored; 0 to never ignore.'))
+    tinyFootprintSize = pexConf.RangeField(dtype=int, default=2, min=2, inclusiveMin=True,
+                                      doc=('Footprints smaller in width or height than this value will be '
+                                           'ignored; minimum of 2 due to PSF gradient calculation.'))
 
     removeMaskPlanes = pexConf.Field(dtype=int, default=True,
                                      doc=("Clear and remove diagnostic mask planes on exit "
@@ -292,43 +293,27 @@ class SourceDeblendTask(pipeBase.Task):
             kids = []
             nchild = 0
             for j,peak in enumerate(res.peaks):
-
-                failed = False
-                if peak.skip:
-                    # skip this source?
-                    msg = 'Skipping out-of-bounds peak at (%i,%i)' % (pks[j].getIx(), pks[j].getIy())
-                    self.log.warn(msg)
-                    src.set(self.deblendSkippedKey, True)
-                    failed = True
-
                 heavy = peak.getFluxPortion()
-                if heavy is None:
-                    # This can happen for children >= maxNumberOfPeaks
-                    msg = 'Skipping peak at (%i,%i), child %i of %i: no flux portion' \
-                          % (pks[j].getIx(), pks[j].getIy(), j+1, len(res.peaks))
-                    self.log.warn(msg)
+                if heavy is None or peak.skip:
                     src.set(self.deblendSkippedKey, True)
-                    failed = True
-
-                if failed:
-                    if self.config.propagateAllPeaks:
-                        # make sure we have enough info to create a minimal child src
-                        if heavy is None:
-                            # copy the full footprint and strip out extra peaks
-                            foot = afwDet.Footprint(src.getFootprint())
-                            peakList = foot.getPeaks()
-                            peakList.clear()
-                            peakList.append(peak.peak)
-                            zeroMimg = afwImage.MaskedImageF(foot.getBBox())
-                            heavy = afwDet.makeHeavyFootprint(foot, zeroMimg)
-                        if peak.deblendedAsPsf:
-                            if peak.psfFitFlux is None:
-                                peak.psfFitFlux = 0.0
-                            if peak.psfFitCenter is None:
-                                peak.psfFitCenter = (peak.peak.getIx(), peak.peak.getIy())
-                        self.log.warn("Peak failed.  Using minimal default info for child.")
-                    else:
+                    if not self.config.propagateAllPeaks:
+                        # Don't care
                         continue
+                    # We need to preserve the peak: make sure we have enough info to create a minimal child src
+                    self.log.logdebug("Peak failed.  Using minimal default info for child.")
+                    if heavy is None:
+                        # copy the full footprint and strip out extra peaks
+                        foot = afwDet.Footprint(src.getFootprint())
+                        peakList = foot.getPeaks()
+                        peakList.clear()
+                        peakList.append(peak.peak)
+                        zeroMimg = afwImage.MaskedImageF(foot.getBBox())
+                        heavy = afwDet.makeHeavyFootprint(foot, zeroMimg)
+                    if peak.deblendedAsPsf:
+                        if peak.psfFitFlux is None:
+                            peak.psfFitFlux = 0.0
+                        if peak.psfFitCenter is None:
+                            peak.psfFitCenter = (peak.peak.getIx(), peak.peak.getIy())
 
                 assert(len(heavy.getPeaks()) == 1)
 
