@@ -307,7 +307,7 @@ def makeplots(butler, dataId, ps, sources=None, pids=None, minsize=0,
                     supt = 'flux portion + stray'
                 elif plotnum == 2:
                     kfoot = afwDet.makeHeavyFootprint(kid.templateFootprint,
-                                                      kid.templateMaskedImage)
+                                                      kid.templateImage)
                     supt = 'template'
                 elif plotnum == 3:
                     if kid.deblendedAsPsf:
@@ -321,7 +321,7 @@ def makeplots(butler, dataId, ps, sources=None, pids=None, minsize=0,
                         #     print '  span', sp
                     else:
                         kfoot = afwDet.makeHeavyFootprint(kid.templateFootprint,
-                                                          kid.templateMaskedImage)
+                                                          kid.templateImage)
                     supt = 'psf template'
 
                 kimg,h = foot_to_img(kfoot, None)

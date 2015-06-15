@@ -92,13 +92,13 @@ class SourceDeblendConfig(pexConf.Config):
     maxNumberOfPeaks = pexConf.Field(dtype=int, default=0,
                                      doc=("Only deblend the brightest maxNumberOfPeaks peaks in the parent" +
                                           " (<= 0: unlimited)"))
-    maxFootprintArea = pexConf.Field(dtype=int, default=10000,
+    maxFootprintArea = pexConf.Field(dtype=int, default=1000000,
                                      doc=("Maximum area for footprints before they are ignored as large; "
                                           "non-positive means no threshold applied"))
-    maxFootprintSize = pexConf.Field(dtype=int, default=300,
+    maxFootprintSize = pexConf.Field(dtype=int, default=0,
                                     doc=("Maximum linear dimension for footprints before they are ignored "
                                          "as large; non-positive means no threshold applied"))
-    minFootprintAxisRatio = pexConf.Field(dtype=float, default=1.0e-2,
+    minFootprintAxisRatio = pexConf.Field(dtype=float, default=0.0,
                                           doc=("Minimum axis ratio for footprints before they are ignored "
                                                "as large; non-positive means no threshold applied"))
     notDeblendedMask = pexConf.Field(dtype=str, default="NOT_DEBLENDED", optional=True,
@@ -107,10 +107,6 @@ class SourceDeblendConfig(pexConf.Config):
     tinyFootprintSize = pexConf.RangeField(dtype=int, default=2, min=2, inclusiveMin=True,
                                       doc=('Footprints smaller in width or height than this value will be '
                                            'ignored; minimum of 2 due to PSF gradient calculation.'))
-
-    removeMaskPlanes = pexConf.Field(dtype=int, default=True,
-                                     doc=("Clear and remove diagnostic mask planes on exit "
-                                          "(disable for deblender debugging)"))
 
     propagateAllPeaks = pexConf.Field(dtype=bool, default=False,
                                       doc=('Guarantee that all peaks produce a child source.'))
@@ -365,12 +361,6 @@ class SourceDeblendTask(pipeBase.Task):
             self.postSingleDeblendHook(exposure, srcs, i, npre, kids, fp, psf, psf_fwhm, sigma1, res)
             #print 'Deblending parent id', src.getId(), 'took', time.clock() - t0
 
-        if self.config.removeMaskPlanes:
-            mask = exposure.getMaskedImage().getMask()
-            definedMasks = set(mask.getMaskPlaneDict().keys())
-            for nm in ['SYMM_1SIG', 'SYMM_3SIG', 'MONOTONIC_1SIG']:
-                if nm in definedMasks:
-                    mask.removeAndClearMaskPlane(nm, True)
 
         n1 = len(srcs)
         self.log.info('Deblended: of %i sources, %i were deblended, creating %i children, total %i sources' %
