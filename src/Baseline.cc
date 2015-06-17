@@ -257,7 +257,7 @@ makeMonotonic(
 
 static double _get_contrib_r_to_footprint(int x, int y,
                                           det::Footprint::Ptr tfoot) {
-    typedef typename det::Footprint::SpanList SpanList;
+    typedef det::Footprint::SpanList SpanList;
     double minr2 = 1e12;
     SpanList const& tspans = tfoot->getSpans();
     for (SpanList::const_iterator ts = tspans.begin(); ts < tspans.end(); ++ts) {
