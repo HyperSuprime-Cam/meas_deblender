@@ -458,7 +458,8 @@ class SourceDeblendTask(pipeBase.Task):
             srcId = src.getId()
             numerator = sum(foot.dot(f) for k, f in zip(kids, kidFeet) if k.getId() != srcId)
             denominator = foot.dot(foot)
-            src.set(self.blendednessKey, numerator/denominator)
+            value = numerator/denominator if denominator != 0.0 else 0.0
+            src.set(self.blendednessKey, value)
 
         setBlendedness(parent, parentFoot)
         for k, f in zip(kids, kidFeet):
