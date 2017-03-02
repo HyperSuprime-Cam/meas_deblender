@@ -381,7 +381,10 @@ class SourceDeblendTask(pipeBase.Task):
             # to their original values.  The following updates the parent footprint
             # in-place to ensure it contains the full union of itself and all of its
             # children's footprints.
-            src.getFootprint().include([child.getFootprint() for child in kids])
+            spans = src.getFootprint().spans
+            for child in kids:
+                spans = spans.union(child.getFootprint().spans)
+            src.getFootprint().setSpans(spans)
 
             src.set(self.nChildKey, nchild)
 

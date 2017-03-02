@@ -30,6 +30,51 @@ import lsst.afw.geom as afwGeom
 # Import C++ routines
 from .baselineUtils import BaselineUtilsF as butils
 
+
+def clipFootprintToNonzeroImpl(foot, image):
+    '''
+     Clips the given *Footprint* to the region in the *Image*
+     containing non-zero values.  The clipping drops spans that are
+     totally zero, and moves endpoints to non-zero; it does not
+     split spans that have internal zeros.
+    '''
+    x0 = image.getX0()
+    y0 = image.getY0()
+    xImMax = x0 + image.getDimensions().getX()
+    yImMax = y0 + image.getDimensions().getY()
+    newSpans = []
+    for span in foot.spans:
+        y = span.getY()
+        if y < y0 or y > yImMax:
+            continue
+        xminFound = None
+        for x in range(span.getX0(), span.getX1()+1):
+            if x < x0 or x > xImMax:
+                continue
+            if image.getArray()[y-y0, x-x0] > 0:
+                xminFound = x
+                break
+        # in no minimum was found there is no reason to look for the end, and
+        # no span will be added, i.e. the whole row is zero
+        # This is an explicit check for None, as a pixel with a value of zero
+        # will evaluate as false here
+        if xminFound is not None:
+            xmaxFound = None
+            for x in range(span.getX0(), span.getX1()+1)[::-1]:
+                if x < x0 or x > xImMax:
+                    continue
+                if image.getArray()[y-y0, x-x0] > 0:
+                    xmaxFound = x
+                    break
+            # the max should be found, if it is not there is a problem
+            assert(xmaxFound is not None)
+            # append the new span found to the list
+            newSpans.append(afwGeom.Span(y, xminFound, xmaxFound))
+    # Time to update the SpanSet
+    foot.setSpans(afwGeom.SpanSet(newSpans))
+    foot.removeOrphanPeaks()
+
+
 class DeblenderPlugin(object):
     """Class to define plugins for the deblender.
 
@@ -138,7 +183,7 @@ def fitPsfs(debResult, log, psfChisqCut1=1.5, psfChisqCut2=1.5, psfChisqCut2b=1.
         # create mask image for pixels within the footprint
         fmask = afwImage.MaskU(dp.bb)
         fmask.setXY0(dp.bb.getMinX(), dp.bb.getMinY())
-        afwDet.setMaskFromFootprint(fmask, dp.fp, 1)
+        dp.fp.spans.setMask(fmask, 1)
 
         # pk.getF() -- retrieving the floating-point location of the peak
         # -- actually shows up in the profile if we do it in the loop, so
@@ -608,10 +653,9 @@ def _fitPsf(fp, fmask, pk, pkF, pkres, fbb, peaks, peaksF, log, psf, psffwhm,
 
         # Copy the part of the PSF model within the clipped footprint.
         psfmod = afwImage.ImageF(bb)
-        afwDet.copyWithinFootprintImage(fpcopy, psfimg, psfmod)
+        fpcopy.spans.copyImage(psfimg, psfmod)
         # Save it as our template.
-        fpcopy.clipToNonzero(psfmod)
-        fpcopy.normalize()
+        clipFootprintToNonzeroImpl(fpcopy, psfmod)
         pkres.setTemplate(psfmod, fpcopy)
 
         # DEBUG
@@ -798,11 +842,11 @@ def _handle_flux_at_edge(log, psffwhm, t1, tfoot, fp, maskedImage,
     # (footprint+margin)-clipped image;
     # we need the pixels OUTSIDE the footprint to be 0.
     fpcopy = afwDet.Footprint(fp)
-    fpcopy = afwDet.growFootprint(fpcopy, S)
-    fpcopy.clipTo(tbb)
-    fpcopy.normalize()
+    fpcopy.dilate(S)
+    fpcopy.setSpans(fpcopy.spans.clippedTo(tbb))
+    fpcopy.removeOrphanPeaks()
     padim = maskedImage.Factory(tbb)
-    afwDet.copyWithinFootprintMaskedImage(fpcopy, maskedImage, padim)
+    fpcopy.spans.clippedTo(maskedImage.getBBox()).copyMaskedImage(maskedImage, padim)
 
     # find pixels on the edge of the template
     edgepix = butils.getSignificantEdgePixels(t1, tfoot, -1e6)
@@ -968,8 +1012,7 @@ def clipFootprintsToNonzero(debResult, log):
                 continue
             modified = True
             timg, tfoot = pkres.templateImage, pkres.templateFootprint
-            tfoot.clipToNonzero(timg)
-            tfoot.normalize()
+            clipFootprintToNonzeroImpl(tfoot, timg)
             if not tfoot.getBBox().isEmpty() and tfoot.getBBox() != timg.getBBox(afwImage.PARENT):
                 timg = timg.Factory(timg, tfoot.getBBox(), afwImage.PARENT, True)
             pkres.setTemplate(timg, tfoot)
@@ -1256,7 +1299,10 @@ def apportionFlux(debResult, log, assignStrayFlux=True, strayFluxAssignment='r-t
 
         # Shrink parent to union of children
         if strayFluxAssignment == 'trim':
-            dp.fp.include(tfoots, True)
+            finalSpanSet = afwGeom.SpanSet()
+            for foot in tfoots:
+                finalSpanSet = finalSpanSet.union(foot.spans)
+            dp.fp.setSpans(finalSpanSet)
 
         # Store the template sum in the deblender result
         if getTemplateSum:
