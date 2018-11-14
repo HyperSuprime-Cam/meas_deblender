@@ -30,6 +30,7 @@ import lsst.afw.geom.ellipses as afwEll
 import lsst.afw.image as afwImage
 import lsst.afw.detection as afwDet
 import lsst.afw.table as afwTable
+from lsst.meas.deblender.baseline import deblend
 
 __all__ = 'SourceDeblendConfig', 'SourceDeblendTask'
 
@@ -132,6 +133,8 @@ class SourceDeblendConfig(pexConf.Config):
                                         "be removed."))
     medianSmoothTemplate = pexConf.Field(dtype=bool, default=True,
                                          doc="Apply a smoothing filter to all of the template images")
+    forcedDecorrelationRadius = pexConf.Field(dtype=int, default=300, doc="Radius for forced decorrelation")
+
 
 ## \addtogroup LSST_task_documentation
 ## \{
@@ -198,6 +201,8 @@ class SourceDeblendTask(pipeBase.Task):
                                          doc='Parent footprint covered too many pixels')
         self.maskedKey = schema.addField('deblend_masked', type='Flag',
                                          doc='Parent footprint was predominantly masked')
+        self.forcedDecorrKey = schema.addField("deblend_forcedDecorr", type="Flag",
+                                               doc="Part of a blend that was forcible decorrelated")
 
         if self.config.catchFailures:
             self.deblendFailedKey = schema.addField('deblend_failed', type='Flag',
@@ -268,131 +273,8 @@ class SourceDeblendTask(pipeBase.Task):
         n0 = len(srcs)
         nparents = 0
         for i, src in enumerate(srcs):
-            #t0 = time.clock()
-
-            fp = src.getFootprint()
-            pks = fp.getPeaks()
-
-            # Since we use the first peak for the parent object, we should propagate its flags
-            # to the parent source.
-            src.assign(pks[0], self.peakSchemaMapper)
-
-            if len(pks) < 2:
-                continue
-
-            if self.isLargeFootprint(fp):
-                src.set(self.tooBigKey, True)
-                self.skipParent(src, mi.getMask())
-                self.log.trace('Parent %i: skipping large footprint', int(src.getId()))
-                continue
-            if self.isMasked(fp, exposure.getMaskedImage().getMask()):
-                src.set(self.maskedKey, True)
-                self.skipParent(src, mi.getMask())
-                self.log.trace('Parent %i: skipping masked footprint', int(src.getId()))
-                continue
-
-            nparents += 1
-            bb = fp.getBBox()
-            psf_fwhm = self._getPsfFwhm(psf, bb)
-
-            self.log.trace('Parent %i: deblending %i peaks', int(src.getId()), len(pks))
-
-            self.preSingleDeblendHook(exposure, srcs, i, fp, psf, psf_fwhm, sigma1)
-            npre = len(srcs)
-
-            # This should really be set in deblend, but deblend doesn't have access to the src
-            src.set(self.tooManyPeaksKey, len(fp.getPeaks()) > self.config.maxNumberOfPeaks)
-
-            try:
-                res = deblend(
-                    fp, mi, psf, psf_fwhm, sigma1=sigma1,
-                    psfChisqCut1=self.config.psfChisq1,
-                    psfChisqCut2=self.config.psfChisq2,
-                    psfChisqCut2b=self.config.psfChisq2b,
-                    maxNumberOfPeaks=self.config.maxNumberOfPeaks,
-                    strayFluxToPointSources=self.config.strayFluxToPointSources,
-                    assignStrayFlux=self.config.assignStrayFlux,
-                    strayFluxAssignment=self.config.strayFluxRule,
-                    rampFluxAtEdge=(self.config.edgeHandling == 'ramp'),
-                    patchEdges=(self.config.edgeHandling == 'noclip'),
-                    tinyFootprintSize=self.config.tinyFootprintSize,
-                    clipStrayFluxFraction=self.config.clipStrayFluxFraction,
-                    weightTemplates=self.config.weightTemplates,
-                    removeDegenerateTemplates=self.config.removeDegenerateTemplates,
-                    maxTempDotProd=self.config.maxTempDotProd,
-                    medianSmoothTemplate=self.config.medianSmoothTemplate
-                )
-                if self.config.catchFailures:
-                    src.set(self.deblendFailedKey, False)
-            except Exception as e:
-                if self.config.catchFailures:
-                    self.log.warn("Unable to deblend source %d: %s" % (src.getId(), e))
-                    src.set(self.deblendFailedKey, True)
-                    import traceback
-                    traceback.print_exc()
-                    continue
-                else:
-                    raise
-
-            kids = []
-            nchild = 0
-            for j, peak in enumerate(res.deblendedParents[0].peaks):
-                heavy = peak.getFluxPortion()
-                if heavy is None or peak.skip:
-                    src.set(self.deblendSkippedKey, True)
-                    if not self.config.propagateAllPeaks:
-                        # Don't care
-                        continue
-                    # We need to preserve the peak: make sure we have enough info to create a minimal
-                    # child src
-                    self.log.trace("Peak at (%i,%i) failed.  Using minimal default info for child.",
-                                      pks[j].getIx(), pks[j].getIy())
-                    if heavy is None:
-                        # copy the full footprint and strip out extra peaks
-                        foot = afwDet.Footprint(src.getFootprint())
-                        peakList = foot.getPeaks()
-                        peakList.clear()
-                        peakList.append(peak.peak)
-                        zeroMimg = afwImage.MaskedImageF(foot.getBBox())
-                        heavy = afwDet.makeHeavyFootprint(foot, zeroMimg)
-                    if peak.deblendedAsPsf:
-                        if peak.psfFitFlux is None:
-                            peak.psfFitFlux = 0.0
-                        if peak.psfFitCenter is None:
-                            peak.psfFitCenter = (peak.peak.getIx(), peak.peak.getIy())
-
-                assert(len(heavy.getPeaks()) == 1)
-
-                src.set(self.deblendSkippedKey, False)
-                child = srcs.addNew()
-                nchild += 1
-                child.assign(heavy.getPeaks()[0], self.peakSchemaMapper)
-                child.setParent(src.getId())
-                child.setFootprint(heavy)
-                child.set(self.psfKey, peak.deblendedAsPsf)
-                child.set(self.hasStrayFluxKey, peak.strayFlux is not None)
-                if peak.deblendedAsPsf:
-                    (cx, cy) = peak.psfFitCenter
-                    child.set(self.psfCenterKey, afwGeom.Point2D(cx, cy))
-                    child.set(self.psfFluxKey, peak.psfFitFlux)
-                child.set(self.deblendRampedTemplateKey, peak.hasRampedTemplate)
-                child.set(self.deblendPatchedTemplateKey, peak.patched)
-                kids.append(child)
-
-            # Child footprints may extend beyond the full extent of their parent's which
-            # results in a failure of the replace-by-noise code to reinstate these pixels
-            # to their original values.  The following updates the parent footprint
-            # in-place to ensure it contains the full union of itself and all of its
-            # children's footprints.
-            spans = src.getFootprint().spans
-            for child in kids:
-                spans = spans.union(child.getFootprint().spans)
-            src.getFootprint().setSpans(spans)
-
-            src.set(self.nChildKey, nchild)
-
-            self.postSingleDeblendHook(exposure, srcs, i, npre, kids, fp, psf, psf_fwhm, sigma1, res)
-            #print 'Deblending parent id', src.getId(), 'took', time.clock() - t0
+            if self.singleDeblend(exposure, psf, srcs, i, sigma1):
+                nparents += 1
 
         n1 = len(srcs)
         self.log.info('Deblended: of %i sources, %i were deblended, creating %i children, total %i sources'
@@ -403,6 +285,225 @@ class SourceDeblendTask(pipeBase.Task):
 
     def postSingleDeblendHook(self, exposure, srcs, i, npre, kids, fp, psf, psf_fwhm, sigma1, res):
         pass
+
+    def forcedDecorrelationDeblend(self, exposure, psf, catalog, i, sigma1):
+        src = catalog[i]
+        fp = src.getFootprint()
+        peaks = fp.getPeaks()
+        bbox = fp.getBBox()
+        size = 2*self.config.forcedDecorrelationRadius
+        boxes = []
+        numSources = len(fp.getPeaks())
+
+        # Best (smallest) distance from source to center of box
+        bestDistances = {}
+        # Corresponding deblended sources
+        bestDeblends = {}
+
+        for yy in np.arange(bbox.getMinY(), bbox.getMaxY() + 1, self.config.forcedDecorrelationRadius):
+            yStop = min(yy + size - 1, bbox.getMaxY())
+            yStart = max(bbox.getMinY(), yStop - size + 1)
+            for xx in np.arange(bbox.getMinX(), bbox.getMaxX() + 1, self.config.forcedDecorrelationRadius):
+                xStop = min(xx + size - 1, bbox.getMaxX())
+                xStart = max(bbox.getMinX(), xStop - size + 1)
+                thisBox = afwGeom.Box2I(afwGeom.Point2I(xStart, yStart),
+                                        afwGeom.Point2I(xStop, yStop))
+                boxes.append(thisBox)
+
+                # Clip the footprint
+                thisSpans = fp.getSpans().clippedTo(thisBox)
+                thisFootprint = afwDet.Footprint(thisSpans, peaks.schema,
+                                                 fp.getRegion())
+                assert max(*thisFootprint.getBBox().getDimensions()) <= size
+
+                # Remove any peaks not in the new footprint
+                thisPeaks = thisFootprint.getPeaks()
+                thisPeaks.reserve(len(peaks))
+                for pp in peaks:
+                    if thisSpans.contains(pp.getI()):
+                        thisPeaks.append(pp)
+
+                if len(thisPeaks) == 0:
+                    continue
+
+                dummyCatalog = afwTable.SourceCatalog(catalog.schema)
+                dummyCatalog.reserve(len(thisPeaks) + 1)
+                dummyCatalog.append(src)  # This doesn't copy; we're sharing the same memory
+
+                # Deblend as normal
+                try:
+                    dummyCatalog[0].setFootprint(thisFootprint)
+                    self.singleDeblend(exposure, psf, dummyCatalog, 0, sigma1)
+                finally:
+                    dummyCatalog[0].setFootprint(fp)
+
+                if dummyCatalog[0].get(self.tooBigKey):
+                    self.log.warn("Large parent detected when forcing decorrelation: probably misconfigured")
+
+                # For each deblended source
+                # * calculate distance to center of box
+                # * if distance is smallest for that source, put it in bestDeblends
+                thisCenter = afwGeom.Box2D(thisBox).getCenter()
+                for ss in dummyCatalog[1:]:
+                    sourcePeaks = ss.getFootprint().getPeaks()
+                    assert len(sourcePeaks) == 1, "Source was not deblended"
+                    sourceCenter = sourcePeaks[0].getI()
+                    index = tuple([*sourceCenter])
+                    distance = thisCenter.distanceSquared(afwGeom.Point2D(sourceCenter))
+                    if distance < bestDistances.get(index, np.inf):
+                        bestDistances[index] = distance
+                        bestDeblends[index] = ss
+
+        # Put bestDeblends into catalog
+        assert len(bestDeblends) == numSources, "Not all sources deblended"
+        idKey = catalog.schema.find("id").key
+        for ss in bestDeblends.values():
+            ss.set(self.forcedDecorrKey, True)
+            new = catalog.addNew()
+            idNum = new.get(idKey)
+            new.assign(ss)
+            new.set(idKey, idNum)
+
+        # Shrink parent to union of children
+        if self.config.strayFluxRule == 'trim':
+            finalSpans = afwGeom.SpanSet()
+            for ss in bestDeblends.values():
+                finalSpans = finalSpans.union(ss.getFootprint().getSpans())
+            src.getFootprint().setSpans(finalSpans)
+
+        src.set(self.forcedDecorrKey, True)
+        src.set(self.nChildKey, numSources)
+        return True
+
+    def singleDeblend(self, exposure, psf, srcs, i, sigma1):
+        src = srcs[i]
+        mi = exposure.maskedImage
+        fp = src.getFootprint()
+        pks = fp.getPeaks()
+
+        # Since we use the first peak for the parent object, we should propagate its flags
+        # to the parent source.
+        src.assign(pks[0], self.peakSchemaMapper)
+
+        if len(pks) < 2:
+            return False
+
+        if (self.config.forcedDecorrelationRadius > 0 and
+                max(*src.getFootprint().getBBox().getDimensions()) > 2*self.config.forcedDecorrelationRadius):
+            return self.forcedDecorrelationDeblend(exposure, psf, srcs, i, sigma1)
+
+        if self.isLargeFootprint(fp):
+            src.set(self.tooBigKey, True)
+            self.skipParent(src, mi.getMask())
+            self.log.trace('Parent %i: skipping large footprint', int(src.getId()))
+            return False
+        if self.isMasked(fp, exposure.getMaskedImage().getMask()):
+            src.set(self.maskedKey, True)
+            self.skipParent(src, mi.getMask())
+            self.log.trace('Parent %i: skipping masked footprint', int(src.getId()))
+            return False
+
+        bb = fp.getBBox()
+        psf_fwhm = self._getPsfFwhm(psf, bb)
+
+        self.log.trace('Parent %i: deblending %i peaks', int(src.getId()), len(pks))
+
+        self.preSingleDeblendHook(exposure, srcs, i, fp, psf, psf_fwhm, sigma1)
+        npre = len(srcs)
+
+        # This should really be set in deblend, but deblend doesn't have access to the src
+        src.set(self.tooManyPeaksKey, len(fp.getPeaks()) > self.config.maxNumberOfPeaks)
+
+        try:
+            res = deblend(
+                fp, mi, psf, psf_fwhm, sigma1=sigma1,
+                psfChisqCut1=self.config.psfChisq1,
+                psfChisqCut2=self.config.psfChisq2,
+                psfChisqCut2b=self.config.psfChisq2b,
+                maxNumberOfPeaks=self.config.maxNumberOfPeaks,
+                strayFluxToPointSources=self.config.strayFluxToPointSources,
+                assignStrayFlux=self.config.assignStrayFlux,
+                strayFluxAssignment=self.config.strayFluxRule,
+                rampFluxAtEdge=(self.config.edgeHandling == 'ramp'),
+                patchEdges=(self.config.edgeHandling == 'noclip'),
+                tinyFootprintSize=self.config.tinyFootprintSize,
+                clipStrayFluxFraction=self.config.clipStrayFluxFraction,
+                weightTemplates=self.config.weightTemplates,
+                removeDegenerateTemplates=self.config.removeDegenerateTemplates,
+                maxTempDotProd=self.config.maxTempDotProd,
+                medianSmoothTemplate=self.config.medianSmoothTemplate
+            )
+            if self.config.catchFailures:
+                src.set(self.deblendFailedKey, False)
+        except Exception as e:
+            if self.config.catchFailures:
+                self.log.warn("Unable to deblend source %d: %s" % (src.getId(), e))
+                src.set(self.deblendFailedKey, True)
+                import traceback
+                traceback.print_exc()
+                return True
+            else:
+                raise
+
+        kids = []
+        nchild = 0
+        for j, peak in enumerate(res.deblendedParents[0].peaks):
+            heavy = peak.getFluxPortion()
+            if heavy is None or peak.skip:
+                src.set(self.deblendSkippedKey, True)
+                if not self.config.propagateAllPeaks:
+                    # Don't care
+                    continue
+                # We need to preserve the peak: make sure we have enough info to create a minimal
+                # child src
+                self.log.trace("Peak at (%i,%i) failed.  Using minimal default info for child.",
+                                    pks[j].getIx(), pks[j].getIy())
+                if heavy is None:
+                    # copy the full footprint and strip out extra peaks
+                    foot = afwDet.Footprint(src.getFootprint())
+                    peakList = foot.getPeaks()
+                    peakList.clear()
+                    peakList.append(peak.peak)
+                    zeroMimg = afwImage.MaskedImageF(foot.getBBox())
+                    heavy = afwDet.makeHeavyFootprint(foot, zeroMimg)
+                if peak.deblendedAsPsf:
+                    if peak.psfFitFlux is None:
+                        peak.psfFitFlux = 0.0
+                    if peak.psfFitCenter is None:
+                        peak.psfFitCenter = (peak.peak.getIx(), peak.peak.getIy())
+
+            assert(len(heavy.getPeaks()) == 1)
+
+            src.set(self.deblendSkippedKey, False)
+            child = srcs.addNew()
+            nchild += 1
+            child.assign(heavy.getPeaks()[0], self.peakSchemaMapper)
+            child.setParent(src.getId())
+            child.setFootprint(heavy)
+            child.set(self.psfKey, peak.deblendedAsPsf)
+            child.set(self.hasStrayFluxKey, peak.strayFlux is not None)
+            if peak.deblendedAsPsf:
+                (cx, cy) = peak.psfFitCenter
+                child.set(self.psfCenterKey, afwGeom.Point2D(cx, cy))
+                child.set(self.psfFluxKey, peak.psfFitFlux)
+            child.set(self.deblendRampedTemplateKey, peak.hasRampedTemplate)
+            child.set(self.deblendPatchedTemplateKey, peak.patched)
+            kids.append(child)
+
+        # Child footprints may extend beyond the full extent of their parent's which
+        # results in a failure of the replace-by-noise code to reinstate these pixels
+        # to their original values.  The following updates the parent footprint
+        # in-place to ensure it contains the full union of itself and all of its
+        # children's footprints.
+        spans = src.getFootprint().spans
+        for child in kids:
+            spans = spans.union(child.getFootprint().spans)
+        src.getFootprint().setSpans(spans)
+
+        src.set(self.nChildKey, nchild)
+
+        self.postSingleDeblendHook(exposure, srcs, i, npre, kids, fp, psf, psf_fwhm, sigma1, res)
+        return True
 
     def isLargeFootprint(self, footprint):
         """Returns whether a Footprint is large
